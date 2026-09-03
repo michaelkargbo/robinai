@@ -340,9 +340,11 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   headerLogo: {
-    width: 26,
-    height: 26,
-    borderRadius: 6,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: Colors.primary,
   },
   brandTitle: {
     color: Colors.text,

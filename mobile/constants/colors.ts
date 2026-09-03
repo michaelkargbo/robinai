@@ -5,32 +5,32 @@
  */
 export const Colors = {
   // Brand
-  primary: "#B6FF00",
-  primaryGlow: "rgba(182, 255, 0, 0.15)",
-  primaryBorder: "rgba(182, 255, 0, 0.35)",
-  primarySubtle: "rgba(182, 255, 0, 0.08)",
+  primary: "#39FF14",
+  primaryGlow: "rgba(57, 255, 20, 0.18)",
+  primaryBorder: "rgba(57, 255, 20, 0.40)",
+  primarySubtle: "rgba(57, 255, 20, 0.10)",
 
   // Backgrounds
-  background: "#0A0A0A",
-  secondaryBg: "#141414",
-  card: "#1C1C1C",
-  cardHover: "#232323",
-  input: "#161616",
+  background: "#0A0D0A",
+  secondaryBg: "#121613",
+  card: "#181F19",
+  cardHover: "#202922",
+  input: "#121713",
 
   // Borders
-  border: "#2A2A2A",
-  borderLight: "#383838",
+  border: "#243026",
+  borderLight: "#344237",
 
   // Typography
   text: "#FFFFFF",
-  textSecondary: "#A0A0A0",
-  textMuted: "#6B6B6B",
+  textSecondary: "#A2B5A5",
+  textMuted: "#637766",
 
   // Status & Accents
   error: "#FF5C5C",
   errorBg: "rgba(255, 92, 92, 0.12)",
   warning: "#E8C547",
-  success: "#3FBF5F",
+  success: "#39FF14",
   blue: "#4DA2FF",
   purple: "#BD6BFF"
 };

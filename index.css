@@ -3,17 +3,17 @@
 @tailwind utilities;
 
 :root {
-  --brand-lime: #B6FF00;
-  --brand-bg: #0A0A0A;
-  --brand-bg2: #141414;
-  --brand-card: #1C1C1C;
-  --brand-border: #2A2A2A;
+  --brand-lime: #39FF14;
+  --brand-bg: #0A0D0A;
+  --brand-bg2: #121613;
+  --brand-card: #181F19;
+  --brand-border: #243026;
 }
 
 body {
   margin: 0;
   padding: 0;
-  background-color: #0A0A0A;
+  background-color: #0A0D0A;
   color: #FFFFFF;
   font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;

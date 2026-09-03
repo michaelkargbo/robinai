@@ -14,22 +14,22 @@ import {
 /*  Design Tokens (Official RobinAI Design System)                        */
 /* ---------------------------------------------------------------------- */
 const C = {
-  bg: "#0A0A0A",
-  bg2: "#141414",
-  card: "#1C1C1C",
-  cardHover: "#232323",
-  input: "#161616",
-  border: "#2A2A2A",
-  borderHover: "#3A3A3A",
+  bg: "#0A0D0A",
+  bg2: "#121613",
+  card: "#181F19",
+  cardHover: "#202922",
+  input: "#121713",
+  border: "#243026",
+  borderHover: "#344237",
   text: "#FFFFFF",
-  sub: "#A0A0A0",
-  muted: "#6B6B6B",
-  lime: "#B6FF00",
-  limeGlow: "rgba(182, 255, 0, 0.18)",
-  limeBorder: "rgba(182, 255, 0, 0.35)",
+  sub: "#A2B5A5",
+  muted: "#637766",
+  lime: "#39FF14",
+  limeGlow: "rgba(57, 255, 20, 0.22)",
+  limeBorder: "rgba(57, 255, 20, 0.42)",
   error: "#FF5C5C",
   warning: "#E8C547",
-  success: "#3FBF5F",
+  success: "#39FF14",
   blue: "#4DA2FF",
   purple: "#BD6BFF"
 };
@@ -44,7 +44,7 @@ function RobinLogo({ size = 28, className = "" }) {
       alt="RobinAI Logo"
       width={size}
       height={size}
-      className={`rounded-xl object-contain shadow-sm ${className}`}
+      className={`rounded-full object-cover border-2 border-[#39FF14] shadow-[0_0_12px_rgba(57,255,20,0.35)] ${className}`}
       style={{ width: size, height: size }}
     />
   );
