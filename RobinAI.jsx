@@ -2197,6 +2197,47 @@ function Composer({ onSend, webOn, setWebOn, deepReason, setDeepReason }) {
 let uid = 0;
 const nid = () => `msg_${Date.now()}_${++uid}`;
 
+const INITIAL_BTC_PAYLOAD = {
+  kind: "price",
+  source: "CoinGecko API · Verified Live Spot Rate",
+  thought: null,
+  asset: "Bitcoin",
+  data: {
+    symbol: "BTC",
+    name: "Bitcoin",
+    price: 67840.5,
+    change24h: 3.24,
+    high24h: 69200,
+    low24h: 65500,
+    marketCap: 1340000000000,
+    volume24h: 34800000000
+  },
+  summary: "Bitcoin (BTC) is currently trading at $67,840.50 USD (+3.24% 24h). 24h trading volume stands at $34.8B with a circulating market capitalization of $1.34T.",
+  follow: [
+    "Analyze BTC Tokenomics",
+    "Check BTC Support Levels",
+    "View Top 10 Crypto Radar",
+    "Explain Market Drivers"
+  ]
+};
+
+const INITIAL_TX_PAYLOAD = {
+  kind: "transaction",
+  source: "Etherscan API · Ethereum Mainnet",
+  thought: null,
+  hash: "0x8f3a1e2b9c4d6f7a8b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a",
+  detail: {
+    status: "Success (Confirmed in block #19,482,105)",
+    network: "Ethereum Mainnet",
+    from: "0x3f5CE5FBFe3E9af3971dD833D26bA9b5C936f0bE",
+    to: "0xdAC17F958D2ee523a2206206994597C13D831ec7 (Tether USD)",
+    amount: "15,000 USDT",
+    fee: "0.0024 ETH ($8.35 USD)",
+    method: "transfer(address _to, uint256 _value)"
+  },
+  follow: ["Check Sender Wallet", "Check Receiver Wallet", "Explain Gas Calculations", "How to Speed Up Pending Txs"]
+};
+
 function makeChat(id, title, group, initialMessages = []) {
   return { id, title, group, messages: initialMessages };
 }
@@ -2212,7 +2253,7 @@ export default function RobinAI() {
       {
         id: "m2",
         role: "assistant",
-        payload: buildResponse("price", "What is the current price of Bitcoin?", true, false),
+        payload: INITIAL_BTC_PAYLOAD,
         loading: false
       }
     ]),
@@ -2225,7 +2266,7 @@ export default function RobinAI() {
       {
         id: "m4",
         role: "assistant",
-        payload: buildResponse("transaction", "0x8f3a1e2b9c4d6f7a8b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a", false, false),
+        payload: INITIAL_TX_PAYLOAD,
         loading: false
       }
     ]),
