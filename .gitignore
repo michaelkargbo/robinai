@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Production build output
+dist/
+dist-ssr/
+*.local
+
+# Environment variables & secrets (CRITICAL: Never commit to Git)
+.env
+.env.*
+!.env.example
+
+# Vercel & local logs
+.vercel/
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Local database store
+db/robin_store.json
+
+# IDE and system
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+.snapshots/
