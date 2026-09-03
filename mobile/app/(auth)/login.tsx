@@ -358,11 +358,8 @@ const styles = StyleSheet.create({
   logoImage: {
     width: 68,
     height: 68,
-    borderRadius: 34,
-    borderWidth: 2,
-    borderColor: Colors.primaryBorder,
+    borderRadius: 18,
     marginBottom: 16,
-    backgroundColor: Colors.secondaryBg,
   },
   heroTitle: {
     color: Colors.text,

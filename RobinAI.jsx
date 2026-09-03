@@ -44,7 +44,7 @@ function RobinLogo({ size = 28, className = "" }) {
       alt="RobinAI Logo"
       width={size}
       height={size}
-      className={`rounded-full object-cover border border-[#B6FF00]/50 shadow-md ${className}`}
+      className={`rounded-xl object-contain shadow-sm ${className}`}
       style={{ width: size, height: size }}
     />
   );

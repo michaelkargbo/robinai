@@ -342,9 +342,7 @@ const styles = StyleSheet.create({
   headerLogo: {
     width: 26,
     height: 26,
-    borderRadius: 13,
-    borderWidth: 1,
-    borderColor: Colors.primaryBorder,
+    borderRadius: 6,
   },
   brandTitle: {
     color: Colors.text,
