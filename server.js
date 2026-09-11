@@ -288,6 +288,7 @@ app.post("/api/chat", optionalAuth, async (req, res) => {
     model = "gemini-1.5-flash",
     apiKey: clientApiKey,
     conversationId,
+    customInstructions,
   } = req.body;
 
   if (!message || typeof message !== "string" || !message.trim()) {
@@ -355,7 +356,10 @@ Always ground your response in these exact live numbers when answering the user'
       const chosenModelName =
         model.toLowerCase().includes("pro") ? "gemini-1.5-pro" : "gemini-1.5-flash";
 
-      const effectiveSystemInstruction = SYSTEM_PROMPT + liveDataInjection;
+      let effectiveSystemInstruction = SYSTEM_PROMPT + liveDataInjection;
+      if (customInstructions && typeof customInstructions === "string" && customInstructions.trim()) {
+        effectiveSystemInstruction += `\n\n[USER CUSTOM INSTRUCTIONS]:\n${customInstructions.trim()}`;
+      }
 
       const geminiModel = activeGenAI.getGenerativeModel({
         model: chosenModelName,

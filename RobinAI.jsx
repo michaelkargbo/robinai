@@ -142,7 +142,7 @@ function detectIntent(raw) {
 /*  Real API Fetchers → Express Backend                                   */
 /* ---------------------------------------------------------------------- */
 
-async function fetchResponse(intent, raw, webOn, deepReason, chatHistory = []) {
+async function fetchResponse(intent, raw, webOn, deepReason, chatHistory = [], model = "Robin Auto", settings = {}) {
   const lower = raw.toLowerCase();
 
   switch (intent) {
@@ -416,7 +416,13 @@ export function useWallet() {
         const resp = await fetch("/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message: raw, history, model: "gemini-1.5-flash" })
+          body: JSON.stringify({
+            message: raw,
+            history,
+            model: model || "Robin Auto",
+            apiKey: settings?.geminiKey || undefined,
+            customInstructions: settings?.customInstructions || undefined
+          })
         });
         if (!resp.ok) throw new Error("AI service unavailable");
         const data = await resp.json();
@@ -2243,36 +2249,45 @@ function makeChat(id, title, group, initialMessages = []) {
 }
 
 export default function RobinAI() {
-  const [chats, setChats] = useState(() => [
-    makeChat("c1", "Bitcoin Market Structure & Outlook", "Today", [
-      {
-        id: "m1",
-        role: "user",
-        text: "What is the current price and market structure of Bitcoin?"
-      },
-      {
-        id: "m2",
-        role: "assistant",
-        payload: INITIAL_BTC_PAYLOAD,
-        loading: false
+  const [chats, setChats] = useState(() => {
+    try {
+      const saved = localStorage.getItem("robinai_chats_v2");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
       }
-    ]),
-    makeChat("c2", "Ethereum Tx Hash Diagnosis", "Today", [
-      {
-        id: "m3",
-        role: "user",
-        text: "Check transaction 0x8f3a1e2b9c4d6f7a8b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a"
-      },
-      {
-        id: "m4",
-        role: "assistant",
-        payload: INITIAL_TX_PAYLOAD,
-        loading: false
-      }
-    ]),
-    makeChat("c3", "Smart Contract Scam Checker", "Yesterday"),
-    makeChat("c4", "Web3 React Wallet Connection", "Previous")
-  ]);
+    } catch {}
+    return [
+      makeChat("c1", "Bitcoin Market Structure & Outlook", "Today", [
+        {
+          id: "m1",
+          role: "user",
+          text: "What is the current price and market structure of Bitcoin?"
+        },
+        {
+          id: "m2",
+          role: "assistant",
+          payload: INITIAL_BTC_PAYLOAD,
+          loading: false
+        }
+      ]),
+      makeChat("c2", "Ethereum Tx Hash Diagnosis", "Today", [
+        {
+          id: "m3",
+          role: "user",
+          text: "Check transaction 0x8f3a1e2b9c4d6f7a8b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a"
+        },
+        {
+          id: "m4",
+          role: "assistant",
+          payload: INITIAL_TX_PAYLOAD,
+          loading: false
+        }
+      ]),
+      makeChat("c3", "Smart Contract Scam Checker", "Yesterday"),
+      makeChat("c4", "Web3 React Wallet Connection", "Previous")
+    ];
+  });
 
   const [activeId, setActiveId] = useState("c1");
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -2310,13 +2325,33 @@ export default function RobinAI() {
   };
 
   // Settings State
-  const [settings, setSettings] = useState({
-    customInstructions: "",
-    geminiKey: "",
-    openaiKey: "",
-    securityGuard: true,
-    soundEffects: true
+  const [settings, setSettings] = useState(() => {
+    try {
+      const saved = localStorage.getItem("robinai_settings");
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return {
+      customInstructions: "",
+      geminiKey: "",
+      openaiKey: "",
+      securityGuard: true,
+      soundEffects: true
+    };
   });
+
+  // Sync chats to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem("robinai_chats_v2", JSON.stringify(chats));
+    } catch {}
+  }, [chats]);
+
+  // Sync settings to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem("robinai_settings", JSON.stringify(settings));
+    } catch {}
+  }, [settings]);
 
   const scrollRef = useRef(null);
   const active = chats.find((c) => c.id === activeId) || null;
@@ -2381,7 +2416,7 @@ export default function RobinAI() {
     const intent = detectIntent(text);
 
     try {
-      const payload = await fetchResponse(intent, text, webOn, deepReason, chatHistory);
+      const payload = await fetchResponse(intent, text, webOn, deepReason, chatHistory, model, settings);
       const assistantMsg = {
         id: loadingMsg.id,
         role: "assistant",

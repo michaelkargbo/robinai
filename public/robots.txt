@@ -2,4 +2,4 @@ User-agent: *
 Allow: /
 Disallow: /api/
 
-Sitemap: https://robinai.io/sitemap.xml
+Sitemap: https://robinai.digital/sitemap.xml
