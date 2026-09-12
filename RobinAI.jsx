@@ -39,14 +39,46 @@ const C = {
 /* ---------------------------------------------------------------------- */
 function RobinLogo({ size = 28, className = "" }) {
   return (
-    <img
-      src="/logo.png"
-      alt="RobinAI Logo"
-      width={size}
-      height={size}
-      className={`rounded-full object-cover border-2 border-[#39FF14] shadow-[0_0_12px_rgba(57,255,20,0.35)] ${className}`}
-      style={{ width: size, height: size }}
-    />
+    <div
+      className={`relative inline-flex items-center justify-center shrink-0 rounded-full transition-transform hover:scale-105 ${className}`}
+      style={{
+        width: size,
+        height: size,
+        background: "radial-gradient(circle at 35% 35%, #182414 0%, #080d09 100%)",
+        border: "1.5px solid #39FF14",
+        boxShadow: "0 0 16px rgba(57, 255, 20, 0.4)",
+      }}
+      title="RobinAI"
+    >
+      <svg
+        viewBox="0 0 48 48"
+        fill="none"
+        xmlns="http://www.w3.org/2000/svg"
+        style={{ width: size * 0.64, height: size * 0.64 }}
+      >
+        {/* Outer Orbit */}
+        <circle cx="24" cy="24" r="20" stroke="#39FF14" strokeWidth="2.5" strokeOpacity="0.95" />
+        {/* Meridians (Longitudes) */}
+        <ellipse cx="24" cy="24" rx="10" ry="20" stroke="#39FF14" strokeWidth="2" strokeOpacity="0.85" />
+        {/* Parallels (Latitudes) */}
+        <ellipse cx="24" cy="24" rx="19" ry="8.5" stroke="#39FF14" strokeWidth="2" strokeOpacity="0.85" />
+        {/* Cross Axes */}
+        <line x1="4" y1="24" x2="44" y2="24" stroke="#39FF14" strokeWidth="2" strokeOpacity="0.85" />
+        <line x1="24" y1="4" x2="24" y2="44" stroke="#39FF14" strokeWidth="2" strokeOpacity="0.85" />
+        {/* Central Core Pulse */}
+        <circle cx="24" cy="24" r="3.5" fill="#39FF14" />
+      </svg>
+      {/* Live Online Status Indicator */}
+      <span
+        className="absolute bottom-0 right-0 rounded-full border-2 border-[#0A0D0A]"
+        style={{
+          width: Math.max(7, size * 0.28),
+          height: Math.max(7, size * 0.28),
+          background: "#39FF14",
+          boxShadow: "0 0 8px #39FF14",
+        }}
+      />
+    </div>
   );
 }
 
@@ -1638,7 +1670,10 @@ function Sidebar({
   onOpenExplore,
   onOpenRadar,
   onOpenSafety,
-  onOpenSettings
+  onOpenSettings,
+  authUser,
+  onSignIn,
+  onLogout
 }) {
   const [searchTerm, setSearchTerm] = useState("");
 
@@ -1780,7 +1815,41 @@ function Sidebar({
         </div>
 
         {/* Footer Navigation */}
-        <div className="border-t px-3 py-3 space-y-1" style={{ borderColor: C.border }}>
+        <div className="border-t px-3 py-3 space-y-1.5" style={{ borderColor: C.border }}>
+          {authUser ? (
+            <div className="flex items-center justify-between rounded-xl p-2" style={{ background: C.card, border: `1px solid ${C.border}` }}>
+              <div className="flex items-center gap-2 overflow-hidden">
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full" style={{ background: "rgba(182,255,0,0.15)", color: C.lime }}>
+                  <User size={15} />
+                </div>
+                <div className="truncate">
+                  <div className="truncate text-[12.5px] font-semibold text-white">{authUser.name || authUser.email}</div>
+                  <div className="truncate text-[10px] text-stone-400">{authUser.email}</div>
+                </div>
+              </div>
+              <button
+                onClick={onLogout}
+                title="Sign out"
+                className="p-1.5 text-stone-400 hover:text-red-400 transition-colors"
+              >
+                <LogOut size={14} />
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={onSignIn}
+              className="flex w-full items-center justify-center gap-2 rounded-xl py-2 text-[12.5px] font-bold transition-all hover:brightness-105 active:scale-[0.98]"
+              style={{
+                background: "linear-gradient(135deg, #39FF14 0%, #B6FF00 100%)",
+                color: "#0A0A0A",
+                boxShadow: "0 2px 10px rgba(57,255,20,0.25)"
+              }}
+            >
+              <User size={14} />
+              <span>Sign In / Create Account</span>
+            </button>
+          )}
+
           <button
             onClick={onOpenSettings}
             className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] text-stone-400 hover:text-white transition-colors"
@@ -2004,10 +2073,15 @@ function ChatHeader({
         ) : (
           <button
             onClick={onSignIn}
-            className="rounded-xl px-4 py-1.5 text-[12.5px] font-bold transition-all hover:brightness-105"
-            style={{ background: "#FFFFFF", color: "#0A0A0A" }}
+            className="flex items-center gap-1.5 rounded-xl px-4 py-1.5 text-[12.5px] font-bold transition-all hover:scale-105 active:scale-95"
+            style={{
+              background: "linear-gradient(135deg, #39FF14 0%, #B6FF00 100%)",
+              color: "#0A0D0A",
+              boxShadow: "0 0 14px rgba(57, 255, 20, 0.35)"
+            }}
           >
-            Log in
+            <User size={13} />
+            <span>Sign In</span>
           </button>
         )}
       </div>
@@ -2486,6 +2560,9 @@ export default function RobinAI() {
         onOpenRadar={() => setRadarOpen(true)}
         onOpenSafety={() => setSafetyOpen(true)}
         onOpenSettings={() => setSettingsOpen(true)}
+        authUser={authUser}
+        onSignIn={() => setAuthOpen(true)}
+        onLogout={handleLogout}
       />
 
       {/* Main Conversation Container */}
