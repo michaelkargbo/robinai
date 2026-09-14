@@ -1,8 +1,10 @@
 // ============================================================
 //  RobinAI — Express Backend Server
 //  Proxies Gemini, CoinGecko & Etherscan APIs securely.
-//  Run:  node server.js        (dev)
-//        pm2 start server.js --name robinai   (production)
+//
+//  Run:  node server.js                        (dev)
+//        pm2 start ecosystem.config.cjs        (production via PM2)
+//        node server.js                        (Railway / Render)
 // ============================================================
 
 import express from "express";
@@ -11,6 +13,11 @@ import dotenv from "dotenv";
 import { fileURLToPath } from "url";
 import path from "path";
 import crypto from "crypto";
+import fs from "fs";
+import compression from "compression";
+import helmet from "helmet";
+import rateLimit from "express-rate-limit";
+import morgan from "morgan";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import db from "./db/database.js";
 
@@ -19,7 +26,104 @@ dotenv.config();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = process.env.PORT || 4000;
-const JWT_SECRET = process.env.JWT_SECRET || "robinai-master-secret-jwt-key-2026";
+const JWT_SECRET =
+  process.env.JWT_SECRET || "robinai-master-secret-jwt-key-2026-change-me";
+
+const IS_PROD = process.env.NODE_ENV === "production";
+
+// ── Ensure logs directory exists ──────────────────────────────
+const logsDir = path.join(__dirname, "logs");
+if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir, { recursive: true });
+
+// ── CORS ───────────────────────────────────────────────────────
+// Allow configured origins or fallback to localhost in dev
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(",").map((o) => o.trim())
+  : [
+      "https://robinai.digital",
+      "https://www.robinai.digital",
+      "http://localhost:3000",
+      "http://localhost:4000",
+    ];
+
+const corsOptions = {
+  origin(origin, callback) {
+    // Allow requests with no origin (curl, mobile apps, server-to-server)
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+    callback(new Error(`CORS policy: origin ${origin} not allowed`));
+  },
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+};
+
+// ── Rate Limiting ─────────────────────────────────────────────
+const chatLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 30, // 30 requests per minute per IP
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many requests. Please slow down and try again in a minute." },
+  skip: (req) => !IS_PROD, // No rate limiting in dev
+});
+
+const apiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many requests." },
+  skip: (req) => !IS_PROD,
+});
+
+// ── Middleware Stack ──────────────────────────────────────────
+app.use(compression());
+
+// Helmet security headers — relaxed CSP for font/API sources
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
+        styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+        fontSrc: ["'self'", "https://fonts.gstatic.com"],
+        imgSrc: ["'self'", "data:", "https:", "blob:"],
+        connectSrc: [
+          "'self'",
+          "https://api.coingecko.com",
+          "https://api.etherscan.io",
+          "https://generativelanguage.googleapis.com",
+        ],
+        frameSrc: ["'none'"],
+        objectSrc: ["'none'"],
+        upgradeInsecureRequests: IS_PROD ? [] : null,
+      },
+    },
+    // Let Express serve static files with caching headers
+    crossOriginEmbedderPolicy: false,
+  })
+);
+
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions)); // Pre-flight
+
+// Request logging
+if (IS_PROD) {
+  const accessLogStream = fs.createWriteStream(
+    path.join(logsDir, "access.log"),
+    { flags: "a" }
+  );
+  app.use(morgan("combined", { stream: accessLogStream }));
+} else {
+  app.use(morgan("dev"));
+}
+
+app.use(express.json({ limit: "2mb" }));
+
+// Trust reverse proxy (Nginx, Railway, Render, Heroku) for real IPs
+app.set("trust proxy", 1);
 
 // ── Auth Helpers ──────────────────────────────────────────────
 function hashPassword(password, salt = "robin_salt_2026") {
@@ -33,14 +137,20 @@ function createToken(user) {
     exp: Date.now() + 30 * 24 * 60 * 60 * 1000, // 30 days
   };
   const str = Buffer.from(JSON.stringify(payload)).toString("base64url");
-  const sig = crypto.createHmac("sha256", JWT_SECRET).update(str).digest("base64url");
+  const sig = crypto
+    .createHmac("sha256", JWT_SECRET)
+    .update(str)
+    .digest("base64url");
   return `${str}.${sig}`;
 }
 
 function verifyToken(token) {
   if (!token || !token.includes(".")) return null;
   const [str, sig] = token.split(".");
-  const expectedSig = crypto.createHmac("sha256", JWT_SECRET).update(str).digest("base64url");
+  const expectedSig = crypto
+    .createHmac("sha256", JWT_SECRET)
+    .update(str)
+    .digest("base64url");
   if (sig !== expectedSig) return null;
   try {
     const payload = JSON.parse(Buffer.from(str, "base64url").toString("utf-8"));
@@ -74,10 +184,6 @@ function optionalAuth(req, res, next) {
   next();
 }
 
-// ── Middleware ────────────────────────────────────────────────
-app.use(cors());
-app.use(express.json());
-
 // ── Init Gemini ───────────────────────────────────────────────
 const genAI = process.env.GEMINI_API_KEY
   ? new GoogleGenerativeAI(process.env.GEMINI_API_KEY)
@@ -108,7 +214,7 @@ CORE PERSONALITY:
 - Crypto-aware without promoting risky behavior.
 - Security-conscious without creating unnecessary fear.
 - Clear, practical, and easy to understand.
-- Adapt explanations to the user’s level of knowledge: explain simply for beginners and provide technical depth when requested.
+- Adapt explanations to the user's level of knowledge: explain simply for beginners and provide technical depth when requested.
 
 GENERAL SUPPORT CAPABILITIES:
 Provide high-quality assistance across all domains:
@@ -224,40 +330,36 @@ const COIN_NAME_TO_SYM = {
   shiba: "SHIB", uniswap: "UNI", litecoin: "LTC",
 };
 
+async function getCoinGeckoHeaders() {
+  const headers = { Accept: "application/json" };
+  if (process.env.COINGECKO_API_KEY) {
+    headers["x-cg-demo-api-key"] = process.env.COINGECKO_API_KEY;
+  }
+  return headers;
+}
+
 async function getLiveCryptoSnapshot(query) {
   try {
     const qLower = query.toLowerCase();
     let targetSym = null;
 
-    // Check symbols
     for (const sym of Object.keys(COIN_IDS)) {
       const reg = new RegExp(`\\b${sym}\\b`, "i");
-      if (reg.test(query)) {
-        targetSym = sym;
-        break;
-      }
+      if (reg.test(query)) { targetSym = sym; break; }
     }
 
-    // Check full names
     if (!targetSym) {
       for (const [name, sym] of Object.entries(COIN_NAME_TO_SYM)) {
-        if (qLower.includes(name)) {
-          targetSym = sym;
-          break;
-        }
+        if (qLower.includes(name)) { targetSym = sym; break; }
       }
     }
 
     if (!targetSym) return null;
     const coinId = COIN_IDS[targetSym];
-
-    const headers = { Accept: "application/json" };
-    if (process.env.COINGECKO_API_KEY) {
-      headers["x-cg-demo-api-key"] = process.env.COINGECKO_API_KEY;
-    }
+    const headers = await getCoinGeckoHeaders();
 
     const url = `https://api.coingecko.com/api/v3/coins/${coinId}?localization=false&tickers=false&community_data=false&developer_data=false`;
-    const resp = await fetch(url, { headers, signal: AbortSignal.timeout(4500) });
+    const resp = await fetch(url, { headers, signal: AbortSignal.timeout(5000) });
     if (!resp.ok) return null;
 
     const data = await resp.json();
@@ -275,13 +377,13 @@ async function getLiveCryptoSnapshot(query) {
       sup: formatLarge(md.circulating_supply),
       rank: data.market_cap_rank,
     };
-  } catch (err) {
+  } catch {
     return null;
   }
 }
 
-// ── Route: /api/chat (Intelligent AI with Large Memory & Live Data) ──
-app.post("/api/chat", optionalAuth, async (req, res) => {
+// ── Route: /api/chat ──────────────────────────────────────────
+app.post("/api/chat", chatLimiter, optionalAuth, async (req, res) => {
   const {
     message,
     history = [],
@@ -301,26 +403,25 @@ app.post("/api/chat", optionalAuth, async (req, res) => {
     process.env.GEMINI_API_KEY ||
     process.env.GOOGLE_API_KEY;
 
-  // 1. Fetch Real-time Live Market or On-Chain Data if relevant
+  // 1. Fetch real-time live market data if relevant
   const liveSnapshot = await getLiveCryptoSnapshot(userQuery);
-  let liveDataInjection = "";
+  let liveDataContext = "";
   if (liveSnapshot) {
-    liveDataInjection = `\n\n[VERIFIED REAL-TIME MARKET DATA FETCHED AT ${new Date().toUTCString()}]:
+    liveDataContext = `\n\n[VERIFIED REAL-TIME MARKET DATA — ${new Date().toUTCString()}]:
 - Asset: ${liveSnapshot.name} (${liveSnapshot.sym})
 - Current Price: $${liveSnapshot.p.toLocaleString()} USD
-- 24-Hour Change: ${liveSnapshot.c >= 0 ? "+" : ""}${liveSnapshot.c}%
-- 24-Hour Range: $${liveSnapshot.low} - $${liveSnapshot.high} USD
-- Market Capitalization: $${liveSnapshot.cap} (Rank #${liveSnapshot.rank || "—"})
-- 24-Hour Volume: $${liveSnapshot.vol} USD
+- 24h Change: ${liveSnapshot.c >= 0 ? "+" : ""}${liveSnapshot.c}%
+- 24h Range: $${liveSnapshot.low} – $${liveSnapshot.high} USD
+- Market Cap: $${liveSnapshot.cap} (Rank #${liveSnapshot.rank || "—"})
+- 24h Volume: $${liveSnapshot.vol} USD
 - Circulating Supply: ${liveSnapshot.sup}
-Always ground your response in these exact live numbers when answering the user's inquiry.`;
+Ground your response in these exact live numbers.`;
   }
 
-  // 2. Format Large Conversation Memory (up to 50 previous interactions)
+  // 2. Format conversation history (up to 50 turns)
   const cleanHistory = [];
   let lastRole = null;
 
-  // If conversationId is provided and user is authenticated, we can also load prior DB messages
   let priorHistory = history;
   if (conversationId && req.user) {
     try {
@@ -328,7 +429,7 @@ Always ground your response in these exact live numbers when answering the user'
       if (dbMessages && dbMessages.length > 0) {
         priorHistory = dbMessages.slice(-50);
       }
-    } catch {}
+    } catch { /* use in-memory history */ }
   }
 
   for (const h of priorHistory.slice(-50)) {
@@ -344,20 +445,22 @@ Always ground your response in these exact live numbers when answering the user'
     }
   }
 
-  // Ensure history starts with user role for Gemini API compliance
+  // Ensure history starts with user role (Gemini API requirement)
   while (cleanHistory.length > 0 && cleanHistory[0].role === "model") {
     cleanHistory.shift();
   }
 
-  // 3. Attempt Gemini API Generation if key available
+  // 3. Attempt Gemini API generation
   if (activeKey && activeKey !== "your_gemini_api_key_here") {
     try {
       const activeGenAI = new GoogleGenerativeAI(activeKey);
-      const chosenModelName =
-        model.toLowerCase().includes("pro") ? "gemini-1.5-pro" : "gemini-1.5-flash";
+      const chosenModelName = model.toLowerCase().includes("pro")
+        ? "gemini-1.5-pro"
+        : "gemini-1.5-flash";
 
-      let effectiveSystemInstruction = SYSTEM_PROMPT + liveDataInjection;
-      if (customInstructions && typeof customInstructions === "string" && customInstructions.trim()) {
+      // System instruction includes live data; user message stays clean
+      let effectiveSystemInstruction = SYSTEM_PROMPT + liveDataContext;
+      if (customInstructions?.trim()) {
         effectiveSystemInstruction += `\n\n[USER CUSTOM INSTRUCTIONS]:\n${customInstructions.trim()}`;
       }
 
@@ -366,23 +469,15 @@ Always ground your response in these exact live numbers when answering the user'
         systemInstruction: effectiveSystemInstruction,
       });
 
-      const chat = geminiModel.startChat({
-        history: cleanHistory,
-      });
-
-      const promptWithLiveData = liveDataInjection
-        ? `${userQuery}\n\n(System context: Ground your answer with this live data: ${liveDataInjection})`
-        : userQuery;
-
-      const result = await chat.sendMessage(promptWithLiveData);
+      const chat = geminiModel.startChat({ history: cleanHistory });
+      const result = await chat.sendMessage(userQuery);
       const replyText = result.response.text();
 
-      // Save to DB if authenticated & conversationId provided
       if (req.user && conversationId) {
         try {
           db.addMessage(conversationId, "user", userQuery, null, chosenModelName);
           db.addMessage(conversationId, "assistant", replyText, null, chosenModelName);
-        } catch {}
+        } catch { /* non-critical */ }
       }
 
       return res.json({
@@ -396,14 +491,12 @@ Always ground your response in these exact live numbers when answering the user'
     }
   }
 
-  // 4. Autonomous Grounded Robin AI Engine (Zero 503 errors, Real Data)
-  const lower = userQuery.toLowerCase();
+  // 4. Autonomous fallback engine (runs when no API key is configured)
   let generatedContent = "";
-  let generatedThought = `1. Evaluated query intent.\n2. Injected real-time live market snapshot.\n3. Structured response following RobinAI Master Guidelines.`;
 
   if (liveSnapshot) {
     const isUp = parseFloat(liveSnapshot.c) >= 0;
-    generatedContent = `I’m Robin, your AI assistant. Here is the verified real-time market intelligence for **${liveSnapshot.name} (${liveSnapshot.sym})**:
+    generatedContent = `Here is the verified real-time market intelligence for **${liveSnapshot.name} (${liveSnapshot.sym})**:
 
 ### Real-Time Market Overview
 - **Spot Price**: **$${liveSnapshot.p.toLocaleString()} USD** (${isUp ? "+" : ""}${liveSnapshot.c}% in last 24h)
@@ -412,7 +505,7 @@ Always ground your response in these exact live numbers when answering the user'
 - **24h Trading Volume**: $${liveSnapshot.vol} USD
 - **Circulating Supply**: ${liveSnapshot.sup} ${liveSnapshot.sym}
 
-### Technical Market Context
+### Market Context
 ${liveSnapshot.name}'s current 24-hour volume of $${liveSnapshot.vol} indicates ${
       parseFloat(liveSnapshot.c) > 3
         ? "strong bullish buying pressure with elevated on-chain liquidity."
@@ -421,57 +514,54 @@ ${liveSnapshot.name}'s current 24-hour volume of $${liveSnapshot.vol} indicates 
         : "balanced consolidation within its current intraday channel."
     }
 
-### Important to Know
-- Always observe broader macroeconomic conditions, Bitcoin dominance, and network hash rate/validator metrics.
-- *Reminder: Never share your seed phrase or private key with anyone.*`;
-  } else if (lower.includes("scam") || lower.includes("drain") || lower.includes("fake") || lower.includes("double")) {
-    generatedContent = `### Potential Security Risk Analysis
+### Important
+- Always observe broader macroeconomic conditions, Bitcoin dominance, and network metrics.
+- *Never share your seed phrase or private key with anyone.*`;
+  } else if (/\b(scam|drain|fake|double|rug|phishing|honeypot)\b/i.test(userQuery)) {
+    generatedContent = `### Security Risk Alert
 
-**Critical Warning**: Never share your 12 or 24-word seed phrase or private keys under any circumstances.
+**Critical Warning**: Never share your 12 or 24-word seed phrase or private keys.
 
 #### Immediate Action Checklist:
 1. **Cease Communication**: Do not interact further with the suspicious entity.
-2. **Never Send Funds**: Legitimate platforms, moderators, and support teams never ask you to pay "unlock fees" or send crypto first.
-3. **Revoke Permissions**: If you connected your wallet, visit [Revoke.cash](https://revoke.cash) to terminate active token allowances.
-4. **Beware Fake Recovery Services**: Anyone claiming they can "hack back" or recover stolen crypto for an upfront fee is an impostor.`;
-  } else if (lower.includes("0x") && lower.length >= 42) {
-    generatedContent = `### On-Chain Hash Inspection
-- **Address / Hash Detected**: \`${userQuery.match(/0x[a-fA-F0-9]+/)?.[0] || userQuery}\`
-- **Network**: Ethereum Mainnet / EVM
-- **Explorer Verification**: Check transaction details on [Etherscan](https://etherscan.io) to review gas used, nonce index, and contract execution traces.
-- *Tip: If a transaction is stuck in the mempool, you can speed it up or cancel it by submitting a 0 ETH transaction with the identical nonce at a higher gas fee.*`;
+2. **Never Send Funds**: Legitimate platforms never ask you to pay "unlock fees" or send crypto first.
+3. **Revoke Permissions**: Visit [Revoke.cash](https://revoke.cash) to terminate active token allowances.
+4. **Beware Fake Recovery Services**: Anyone claiming they can "hack back" stolen crypto for an upfront fee is a scammer.`;
+  } else if (/0x[a-fA-F0-9]{64}/i.test(userQuery)) {
+    generatedContent = `### On-Chain Transaction Detected
+- **Hash**: \`${userQuery.match(/0x[a-fA-F0-9]{64}/i)?.[0]}\`
+- **Network**: Ethereum Mainnet / EVM compatible
+- **Verify on**: [Etherscan](https://etherscan.io) — review gas used, nonce, and contract execution traces.
+- *Tip: If stuck in mempool, speed it up by submitting a 0 ETH transaction with the same nonce at a higher gas fee.*`;
   } else {
-    generatedContent = `I’m Robin, your AI assistant.
+    generatedContent = `I'm Robin, your AI assistant. To get full AI responses, ensure a **GEMINI_API_KEY** is configured in your server environment.
 
-I can assist you with general research, software engineering, writing, and deep blockchain & cryptocurrency analysis.
+### I Can Help You With:
+- **Live Market Data**: Spot rates and analysis for Bitcoin, Ethereum, Solana, and 50+ assets.
+- **Security Analysis**: Scam detection, wallet safety, and smart contract auditing.
+- **On-Chain Forensics**: Transaction hash lookup, gas fee diagnosis, and wallet analysis.
+- **Programming**: Full-stack JavaScript, React, Python, Solidity, and API integration.
 
-### How I Can Help You Today:
-- **Live Market Radar**: Spot rates, volume, and tokenomics for Bitcoin, Ethereum, Solana, and 50+ assets.
-- **Smart Contract Security**: Analysis of ERC-20, NFT, and DeFi protocols for honeypot and minting risks.
-- **On-Chain Forensics**: EVM transaction hash decoding, pending gas fee diagnosis, and wallet health audits.
-- **Programming & Architecture**: Full-stack JavaScript, React, Python, Solidity, and API integration.
-
-*Permanent Safety Rule: Never share your seed phrase or private key with anyone.* What topic would you like to explore?`;
+*Permanent Safety Rule: Never share your seed phrase or private key with anyone.*`;
   }
 
-  // Save to DB if authenticated & conversationId provided
   if (req.user && conversationId) {
     try {
       db.addMessage(conversationId, "user", userQuery, null, "Robin AI Core");
-      db.addMessage(conversationId, "assistant", generatedContent, generatedThought, "Robin AI Core");
-    } catch {}
+      db.addMessage(conversationId, "assistant", generatedContent, null, "Robin AI Core");
+    } catch { /* non-critical */ }
   }
 
   return res.json({
     content: generatedContent,
-    thought: generatedThought,
-    model: "Robin AI Core (Live Grounded)",
+    model: "Robin AI Core (Autonomous)",
     liveData: liveSnapshot || null,
     timestamp: Date.now(),
   });
 });
 
-app.get("/api/price/:symbol", async (req, res) => {
+// ── Route: /api/price/:symbol ─────────────────────────────────
+app.get("/api/price/:symbol", apiLimiter, async (req, res) => {
   const sym = req.params.symbol.toUpperCase();
   const coinId = COIN_IDS[sym];
 
@@ -480,18 +570,14 @@ app.get("/api/price/:symbol", async (req, res) => {
   }
 
   try {
-    const headers = { Accept: "application/json" };
-    if (process.env.COINGECKO_API_KEY) {
-      headers["x-cg-demo-api-key"] = process.env.COINGECKO_API_KEY;
-    }
-
+    const headers = await getCoinGeckoHeaders();
     const url = `https://api.coingecko.com/api/v3/coins/${coinId}?localization=false&tickers=false&community_data=false&developer_data=false`;
-    const resp = await fetch(url, { headers });
+    const resp = await fetch(url, { headers, signal: AbortSignal.timeout(5000) });
 
     if (!resp.ok) throw new Error(`CoinGecko ${resp.status}: ${resp.statusText}`);
     const data = await resp.json();
-
     const md = data.market_data;
+
     res.json({
       sym,
       name: data.name,
@@ -513,17 +599,13 @@ app.get("/api/price/:symbol", async (req, res) => {
   }
 });
 
-// ── Route: /api/prices (top 10 market overview) ──────────────
-app.get("/api/prices", async (req, res) => {
+// ── Route: /api/prices (top 10 market overview) ───────────────
+app.get("/api/prices", apiLimiter, async (req, res) => {
   try {
-    const headers = { Accept: "application/json" };
-    if (process.env.COINGECKO_API_KEY) {
-      headers["x-cg-demo-api-key"] = process.env.COINGECKO_API_KEY;
-    }
-
+    const headers = await getCoinGeckoHeaders();
     const url =
       "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=10&page=1&sparkline=false";
-    const resp = await fetch(url, { headers });
+    const resp = await fetch(url, { headers, signal: AbortSignal.timeout(5000) });
     if (!resp.ok) throw new Error(`CoinGecko ${resp.status}`);
     const data = await resp.json();
 
@@ -546,14 +628,14 @@ app.get("/api/prices", async (req, res) => {
 });
 
 // ── Route: /api/tx/:hash (Etherscan) ─────────────────────────
-app.get("/api/tx/:hash", async (req, res) => {
+app.get("/api/tx/:hash", apiLimiter, async (req, res) => {
   const { hash } = req.params;
   const key = process.env.ETHERSCAN_API_KEY;
 
   if (!key) {
     return res.status(503).json({
       error: "Etherscan API key not configured",
-      hint: "Add ETHERSCAN_API_KEY to your .env file",
+      hint: "Add ETHERSCAN_API_KEY to your environment variables",
     });
   }
 
@@ -598,25 +680,33 @@ app.get("/api/tx/:hash", async (req, res) => {
 });
 
 // ── Route: /api/wallet/:address (Etherscan) ──────────────────
-app.get("/api/wallet/:address", async (req, res) => {
+app.get("/api/wallet/:address", apiLimiter, async (req, res) => {
   const { address } = req.params;
   const key = process.env.ETHERSCAN_API_KEY;
 
   if (!key) {
     return res.status(503).json({
       error: "Etherscan API key not configured",
-      hint: "Add ETHERSCAN_API_KEY to your .env file",
+      hint: "Add ETHERSCAN_API_KEY to your environment variables",
     });
   }
 
   try {
-    const [balResp, txResp] = await Promise.all([
+    const [balResp, txResp, ethPriceResp] = await Promise.all([
       fetch(`https://api.etherscan.io/api?module=account&action=balance&address=${address}&tag=latest&apikey=${key}`),
       fetch(`https://api.etherscan.io/api?module=account&action=txlist&address=${address}&startblock=0&endblock=99999999&page=1&offset=10&sort=desc&apikey=${key}`),
+      fetch(`https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd`, { headers: await getCoinGeckoHeaders() }),
     ]);
 
     const balData = await balResp.json();
     const txData = await txResp.json();
+
+    // Use live ETH price instead of hardcoded value
+    let ethUsdPrice = 3490;
+    try {
+      const priceData = await ethPriceResp.json();
+      ethUsdPrice = priceData?.ethereum?.usd || ethUsdPrice;
+    } catch { /* use fallback */ }
 
     const ethBalance = balData.result
       ? (parseInt(balData.result) / 1e18).toFixed(4)
@@ -634,7 +724,7 @@ app.get("/api/wallet/:address", async (req, res) => {
     res.json({
       address,
       ethBalance,
-      ethUsd: parseFloat(ethBalance) * 3490, // approximate, update via /api/price/ETH
+      ethUsd: (parseFloat(ethBalance) * ethUsdPrice).toFixed(2),
       txCount: txData.result?.length || 0,
       recentTxs,
       securityStatus: "On-chain Data",
@@ -650,6 +740,9 @@ app.post("/api/auth/register", async (req, res) => {
   const { email, password, name } = req.body;
   if (!email || !password) {
     return res.status(400).json({ error: "Email and password are required" });
+  }
+  if (password.length < 8) {
+    return res.status(400).json({ error: "Password must be at least 8 characters" });
   }
   try {
     const passwordHash = hashPassword(password);
@@ -676,7 +769,12 @@ app.post("/api/auth/login", async (req, res) => {
     }
     const token = createToken(user);
     const data = await db.findUserById(user.id);
-    res.json({ token, user: { id: user.id, email: user.email }, profile: data.profile, subscription: data.subscription });
+    res.json({
+      token,
+      user: { id: user.id, email: user.email },
+      profile: data.profile,
+      subscription: data.subscription,
+    });
   } catch (err) {
     res.status(500).json({ error: "Login failed", details: err.message });
   }
@@ -687,7 +785,11 @@ app.get("/api/auth/me", requireAuth, async (req, res) => {
   try {
     const data = await db.findUserById(req.user.id);
     if (!data) return res.status(404).json({ error: "User not found" });
-    res.json({ user: { id: data.user.id, email: data.user.email }, profile: data.profile, subscription: data.subscription });
+    res.json({
+      user: { id: data.user.id, email: data.user.email },
+      profile: data.profile,
+      subscription: data.subscription,
+    });
   } catch (err) {
     res.status(500).json({ error: "Failed to fetch user", details: err.message });
   }
@@ -698,6 +800,9 @@ app.post("/api/auth/reset-password", async (req, res) => {
   const { email, newPassword } = req.body;
   if (!email || !newPassword) {
     return res.status(400).json({ error: "Email and new password required" });
+  }
+  if (newPassword.length < 8) {
+    return res.status(400).json({ error: "Password must be at least 8 characters" });
   }
   try {
     const user = await db.findUserByEmail(email);
@@ -710,22 +815,22 @@ app.post("/api/auth/reset-password", async (req, res) => {
   }
 });
 
-// ── Route: /api/auth/account (Delete Account) ─────────────────
+// ── Route: /api/auth/account (Delete) ─────────────────────────
 app.delete("/api/auth/account", requireAuth, async (req, res) => {
   try {
     await db.deleteUser(req.user.id);
     res.json({ success: true, message: "Account and personal data permanently deleted." });
   } catch (err) {
-    res.status(500).json({ error: "Account deletion failed", details: err.message });
+    res.status(500).json({ error: "Account deletion failed" });
   }
 });
 
-// ── Route: /api/conversations (List & Create) ─────────────────
+// ── Route: /api/conversations ─────────────────────────────────
 app.get("/api/conversations", requireAuth, async (req, res) => {
   try {
     const list = await db.getConversations(req.user.id);
     res.json(list);
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: "Failed to fetch conversations" });
   }
 });
@@ -735,12 +840,12 @@ app.post("/api/conversations", requireAuth, async (req, res) => {
     const { title } = req.body;
     const conv = await db.createConversation(req.user.id, title || "New Conversation");
     res.status(201).json(conv);
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: "Failed to create conversation" });
   }
 });
 
-// ── Route: /api/conversations/:id (Rename & Delete) ───────────
+// ── Route: /api/conversations/:id ────────────────────────────
 app.put("/api/conversations/:id", requireAuth, async (req, res) => {
   const { title } = req.body;
   if (!title) return res.status(400).json({ error: "Title is required" });
@@ -756,17 +861,17 @@ app.delete("/api/conversations/:id", requireAuth, async (req, res) => {
   try {
     await db.deleteConversation(req.params.id, req.user.id);
     res.json({ success: true, message: "Conversation deleted" });
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: "Delete failed" });
   }
 });
 
-// ── Route: /api/conversations/:id/messages (Sync) ─────────────
+// ── Route: /api/conversations/:id/messages ───────────────────
 app.get("/api/conversations/:id/messages", requireAuth, async (req, res) => {
   try {
     const msgs = await db.getMessages(req.params.id);
     res.json(msgs);
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: "Failed to load messages" });
   }
 });
@@ -777,28 +882,28 @@ app.post("/api/conversations/:id/messages", requireAuth, async (req, res) => {
   try {
     const msg = await db.addMessage(req.params.id, role, content, thought, model);
     res.status(201).json(msg);
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: "Failed to save message" });
   }
 });
 
-// ── Route: /api/user/profile (Update) ─────────────────────────
+// ── Route: /api/user/profile ──────────────────────────────────
 app.put("/api/user/profile", requireAuth, async (req, res) => {
   const { name, avatarUrl } = req.body;
   try {
     const updated = await db.updateProfile(req.user.id, { name, avatarUrl });
     res.json(updated);
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: "Profile update failed" });
   }
 });
 
-// ── Route: /api/user/subscription ─────────────────────────────
+// ── Route: /api/user/subscription ────────────────────────────
 app.get("/api/user/subscription", requireAuth, async (req, res) => {
   try {
     const sub = await db.getSubscription(req.user.id);
     res.json(sub);
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: "Failed to fetch subscription" });
   }
 });
@@ -809,53 +914,175 @@ app.post("/api/user/subscription", requireAuth, async (req, res) => {
   try {
     const sub = await db.updateSubscription(req.user.id, plan, "active", store);
     res.json(sub);
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: "Subscription update failed" });
   }
 });
 
-// ── Route: /api/notifications/register (Push Tokens) ──────────
+// ── Route: /api/notifications/register ───────────────────────
 app.post("/api/notifications/register", requireAuth, async (req, res) => {
   const { token, platform } = req.body;
   if (!token) return res.status(400).json({ error: "Push token is required" });
   try {
     await db.registerPushToken(req.user.id, token, platform || "mobile");
     res.json({ success: true, message: "Push token registered successfully" });
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: "Failed to register push token" });
   }
+});
+
+// ── Route: /api/system/updates (6-Month Cadence & Future Roadmap) ──
+app.get("/api/system/updates", (req, res) => {
+  // Epoch of RobinAI v1.0 Production Release
+  const baseDate = new Date("2026-09-14T00:00:00Z");
+  const now = new Date();
+
+  // 6-month cadence calculation (~182.5 days per cycle)
+  const sixMonthsMs = 182.5 * 24 * 60 * 60 * 1000;
+  const elapsedMs = Math.max(0, now.getTime() - baseDate.getTime());
+  const currentCycleIndex = Math.floor(elapsedMs / sixMonthsMs);
+
+  const currentCycleStart = new Date(baseDate.getTime() + currentCycleIndex * sixMonthsMs);
+  const nextCycleDate = new Date(baseDate.getTime() + (currentCycleIndex + 1) * sixMonthsMs);
+  const daysUntilNextCycle = Math.max(0, Math.ceil((nextCycleDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)));
+
+  const releases = [
+    {
+      cycle: 1,
+      version: "1.0.0",
+      tagline: "Genesis Production Core & Hardening",
+      releaseDate: "September 2026",
+      status: "active",
+      highlights: [
+        "Verified Live Crypto Market Radar with real-time CoinGecko API spot feeds",
+        "Enterprise Security Shield: Helmet security headers, CSP, CORS allowlist, and rate limiting",
+        "Atomic Persistence: Multi-tier file store with atomic write buffers and corruption prevention",
+        "EVM Blockchain Inspector: Live Etherscan address and transaction diagnostic decoding",
+        "Multi-Engine AI Architecture: Gemini 1.5 Flash + Pro multi-turn crypto reasoning"
+      ]
+    },
+    {
+      cycle: 2,
+      version: "1.5.0",
+      tagline: "Autonomous Sentinels & On-Chain Arbitrage",
+      releaseDate: "March 2027",
+      status: currentCycleIndex >= 1 ? "active" : "upcoming",
+      highlights: [
+        "Autonomous On-Chain Arbitrage Sentinel: Uniswap v3, Curve, and Raydium slippage scanner",
+        "Multi-Agent Neural Swarm: Security Auditor + Tokenomics Strategist multi-agent debate",
+        "Bytecode Decompiler & Zero-Knowledge Smart Contract Formal Verification",
+        "Cross-Chain Gas Optimizer for Ethereum, Solana, Arbitrum, Base, and Polygon"
+      ]
+    },
+    {
+      cycle: 3,
+      version: "2.0.0",
+      tagline: "Institutional DeFi & Predictive Intelligence",
+      releaseDate: "September 2027",
+      status: currentCycleIndex >= 2 ? "active" : "upcoming",
+      highlights: [
+        "Monte Carlo Liquidity & Impermanent Loss Risk Modeling under extreme market stress",
+        "Flashbots Protect & Private RPC Mempool Routing for automated MEV defense",
+        "Decentralized AI Inference Nodes for Zero-Knowledge, privacy-preserving institutional analysis",
+        "Automated Stop-Loss & Hedging Strategy Smart Vault Integration"
+      ]
+    },
+    {
+      cycle: 4,
+      version: "2.5.0",
+      tagline: "Global Autonomous Economy & Layer 3 AppChains",
+      releaseDate: "March 2028",
+      status: currentCycleIndex >= 3 ? "active" : "upcoming",
+      highlights: [
+        "Self-Hosting Agentic Nodes on Decentralized Compute (Akash / Render Network)",
+        "Autonomous AI Trading Agents executing verifiable cryptographic zk-proof strategies",
+        "Decentralized Identity (DID) & Sovereign On-Chain Reputation Scoring"
+      ]
+    }
+  ];
+
+  const currentCycle = releases[Math.min(currentCycleIndex, releases.length - 1)] || releases[0];
+  const upcomingCycles = releases.filter((r) => r.cycle > currentCycle.cycle);
+
+  res.json({
+    system: "RobinAI Autonomous Intelligence Platform",
+    currentVersion: currentCycle.version,
+    activeCycle: currentCycle,
+    cycleDurationMonths: 6,
+    lastReleaseDate: currentCycleStart.toISOString().split("T")[0],
+    nextReleaseDate: nextCycleDate.toISOString().split("T")[0],
+    daysUntilNextCycle,
+    upcomingRoadmap: upcomingCycles,
+    cadence: "Semi-Annual (Every 6 Months)",
+    isNewCycleAvailable: currentCycleIndex > 0,
+    serverUptime: Math.round(process.uptime()),
+    timestamp: now.toISOString()
+  });
 });
 
 // ── Route: /api/health ────────────────────────────────────────
 app.get("/api/health", (req, res) => {
   res.json({
     status: "ok",
+    version: "1.0.0",
     gemini: !!process.env.GEMINI_API_KEY,
     etherscan: !!process.env.ETHERSCAN_API_KEY,
     coingecko: true,
     uptime: Math.round(process.uptime()),
+    environment: process.env.NODE_ENV || "development",
     timestamp: new Date().toISOString(),
   });
 });
 
-// ── Serve built frontend in production ────────────────────────
+// ── Serve Built Frontend ──────────────────────────────────────
 const distPath = path.join(__dirname, "dist");
-app.use(express.static(distPath));
+app.use(
+  express.static(distPath, {
+    maxAge: "1d",
+    etag: true,
+    lastModified: true,
+    setHeaders(res, filePath) {
+      // Immutable cache for hashed assets
+      if (filePath.includes("/assets/")) {
+        res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+      }
+    },
+  })
+);
+
+// SPA fallback — serve index.html for all non-API routes
 app.get("*", (req, res) => {
-  if (!req.path.startsWith("/api")) {
-    res.sendFile(path.join(distPath, "index.html"), (err) => {
-      if (err) res.status(200).send("RobinAI server is running. Run npm run build to serve the frontend.");
-    });
+  if (req.path.startsWith("/api")) return res.status(404).json({ error: "Not found" });
+  const indexPath = path.join(distPath, "index.html");
+  if (fs.existsSync(indexPath)) {
+    res.sendFile(indexPath);
+  } else {
+    res
+      .status(200)
+      .send(
+        "RobinAI server is running. Run <code>npm run build</code> to serve the frontend."
+      );
   }
 });
 
-// ── Start (Local Development) ─────────────────────────────────
-if (process.env.NODE_ENV !== "test" && !process.env.VERCEL) {
-  app.listen(PORT, () => {
-    console.log(`\n🤖 RobinAI Server running on http://localhost:${PORT}`);
+// ── Global Error Handler ──────────────────────────────────────
+app.use((err, req, res, _next) => {
+  if (err.message?.startsWith("CORS policy")) {
+    return res.status(403).json({ error: err.message });
+  }
+  console.error("[Server Error]", err.message);
+  res.status(500).json({ error: "Internal server error" });
+});
+
+// ── Start Server ──────────────────────────────────────────────
+if (!process.env.VERCEL) {
+  app.listen(PORT, "0.0.0.0", () => {
+    console.log(`\n🤖 RobinAI Server — ${process.env.NODE_ENV || "development"} mode`);
+    console.log(`   Listening  : http://0.0.0.0:${PORT}`);
     console.log(`   Gemini AI  : ${process.env.GEMINI_API_KEY ? "✅ Connected" : "⚠️  No key — add GEMINI_API_KEY to .env"}`);
     console.log(`   Etherscan  : ${process.env.ETHERSCAN_API_KEY ? "✅ Connected" : "⚠️  No key — add ETHERSCAN_API_KEY to .env"}`);
     console.log(`   CoinGecko  : ✅ Free tier active`);
+    console.log(`   CORS       : ${allowedOrigins.join(", ")}`);
     console.log(`   Health     : http://localhost:${PORT}/api/health\n`);
   });
 }

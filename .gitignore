@@ -13,16 +13,19 @@ dist-ssr/
 .env.*
 !.env.example
 
-# Vercel & local logs
+# Vercel
 .vercel/
-logs/
+
+# Log files (but keep the logs/ directory)
+logs/*.log
 *.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# Local database store
+# Local database store files (never commit user data)
 db/robin_store.json
+data/
 
 # IDE and system
 .vscode/
@@ -30,3 +33,7 @@ db/robin_store.json
 .DS_Store
 Thumbs.db
 .snapshots/
+
+# Temp files
+*.tmp
+*.temp

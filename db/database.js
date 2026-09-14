@@ -1,6 +1,7 @@
 // ============================================================
 // RobinAI — Unified Database Adapter & Store
-// Supports local file-backed persistence & PostgreSQL / Supabase
+// Supports local file-backed persistence (dev/VPS)
+// Production: set DATA_DIR env var or use PostgreSQL adapter
 // ============================================================
 
 import fs from "fs";
@@ -9,9 +10,33 @@ import crypto from "crypto";
 import { fileURLToPath } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const STORE_PATH = process.env.VERCEL
-  ? path.join("/tmp", "robin_store.json")
-  : path.join(__dirname, "robin_store.json");
+
+// Determine the data directory in priority order:
+// 1. DATA_DIR env var (explicit config for any platform)
+// 2. Vercel serverless → /tmp (ephemeral, resets per invocation)
+// 3. db/ subdirectory relative to this file (local/VPS default)
+function resolveDataDir() {
+  if (process.env.DATA_DIR) {
+    return process.env.DATA_DIR;
+  }
+  if (process.env.VERCEL) {
+    return "/tmp";
+  }
+  // Default: a dedicated data/ directory in the project root
+  const dataDir = path.join(__dirname, "..", "data");
+  if (!fs.existsSync(dataDir)) {
+    try {
+      fs.mkdirSync(dataDir, { recursive: true });
+    } catch (e) {
+      console.warn("[Database] Could not create data/ dir, falling back to /tmp:", e.message);
+      return "/tmp";
+    }
+  }
+  return dataDir;
+}
+
+const DATA_DIR = resolveDataDir();
+const STORE_PATH = path.join(DATA_DIR, "robin_store.json");
 
 // Initial schema template for local persistence
 const initialStore = {
@@ -25,7 +50,8 @@ const initialStore = {
 
 class RobinDatabase {
   constructor() {
-    this.data = initialStore;
+    this.data = { ...initialStore };
+    this._saveDebounce = null;
     this.init();
   }
 
@@ -33,46 +59,60 @@ class RobinDatabase {
     try {
       if (fs.existsSync(STORE_PATH)) {
         const raw = fs.readFileSync(STORE_PATH, "utf-8");
-        this.data = JSON.parse(raw);
+        const parsed = JSON.parse(raw);
+        // Merge with initial store so new fields are always present
+        this.data = { ...initialStore, ...parsed };
+        console.log(`[Database] Store loaded from ${STORE_PATH} (${this.data.users.length} users)`);
       } else {
+        console.log(`[Database] New store created at ${STORE_PATH}`);
         this.save();
       }
     } catch (e) {
-      console.warn("[Database] Using memory store, file save failed:", e.message);
-      this.data = initialStore;
+      console.warn("[Database] Using fresh in-memory store, file read failed:", e.message);
+      this.data = { ...initialStore };
     }
   }
 
   save() {
-    try {
-      fs.writeFileSync(STORE_PATH, JSON.stringify(this.data, null, 2), "utf-8");
-    } catch (e) {
-      console.error("[Database] Failed to write store:", e.message);
-    }
+    // Debounce writes to prevent hammering the disk on rapid operations
+    clearTimeout(this._saveDebounce);
+    this._saveDebounce = setTimeout(() => {
+      try {
+        const tmp = STORE_PATH + ".tmp";
+        fs.writeFileSync(tmp, JSON.stringify(this.data, null, 2), "utf-8");
+        fs.renameSync(tmp, STORE_PATH); // Atomic write
+      } catch (e) {
+        console.error("[Database] Failed to persist store:", e.message);
+      }
+    }, 200);
   }
 
   // ── Authentication & Users ──────────────────────────────────
   async createUser(email, passwordHash, name = "Robin User") {
-    const existing = this.data.users.find((u) => u.email.toLowerCase() === email.toLowerCase());
+    const existing = this.data.users.find(
+      (u) => u.email.toLowerCase() === email.toLowerCase()
+    );
     if (existing) throw new Error("Email already registered");
 
     const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+
     const user = {
       id,
-      email: email.toLowerCase(),
+      email: email.toLowerCase().trim(),
       passwordHash,
-      createdAt: new Date().toISOString(),
+      createdAt: now,
     };
 
     const profile = {
       userId: id,
-      name,
+      name: name || "Robin User",
       avatarUrl: null,
       accountType: "free",
       role: "user",
       queriesUsed: 0,
       queriesLimit: 100,
-      createdAt: new Date().toISOString(),
+      createdAt: now,
     };
 
     this.data.users.push(user);
@@ -83,6 +123,7 @@ class RobinDatabase {
       status: "active",
       store: "none",
       currentPeriodEnd: null,
+      createdAt: now,
     };
 
     this.save();
@@ -90,14 +131,21 @@ class RobinDatabase {
   }
 
   async findUserByEmail(email) {
-    return this.data.users.find((u) => u.email.toLowerCase() === email.toLowerCase()) || null;
+    return (
+      this.data.users.find(
+        (u) => u.email.toLowerCase() === email.toLowerCase().trim()
+      ) || null
+    );
   }
 
   async findUserById(id) {
     const user = this.data.users.find((u) => u.id === id);
     if (!user) return null;
     const profile = this.data.profiles[id] || {};
-    const subscription = this.data.subscriptions[id] || { plan: "free", status: "active" };
+    const subscription = this.data.subscriptions[id] || {
+      plan: "free",
+      status: "active",
+    };
     return { user, profile, subscription };
   }
 
@@ -105,8 +153,8 @@ class RobinDatabase {
     if (!this.data.profiles[userId]) {
       this.data.profiles[userId] = { userId };
     }
-    if (name) this.data.profiles[userId].name = name;
-    if (avatarUrl) this.data.profiles[userId].avatarUrl = avatarUrl;
+    if (name !== undefined) this.data.profiles[userId].name = name;
+    if (avatarUrl !== undefined) this.data.profiles[userId].avatarUrl = avatarUrl;
     this.save();
     return this.data.profiles[userId];
   }
@@ -115,7 +163,16 @@ class RobinDatabase {
     this.data.users = this.data.users.filter((u) => u.id !== userId);
     delete this.data.profiles[userId];
     delete this.data.subscriptions[userId];
-    this.data.conversations = this.data.conversations.filter((c) => c.userId !== userId);
+    // Also delete all conversations and messages for this user
+    const userConvIds = this.data.conversations
+      .filter((c) => c.userId === userId)
+      .map((c) => c.id);
+    this.data.conversations = this.data.conversations.filter(
+      (c) => c.userId !== userId
+    );
+    for (const convId of userConvIds) {
+      delete this.data.messages[convId];
+    }
     this.save();
     return true;
   }
@@ -124,19 +181,16 @@ class RobinDatabase {
   async getConversations(userId) {
     return this.data.conversations
       .filter((c) => c.userId === userId)
-      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+      .sort(
+        (a, b) =>
+          new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+      );
   }
 
   async createConversation(userId, title = "New Conversation") {
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
-    const conv = {
-      id,
-      userId,
-      title,
-      createdAt: now,
-      updatedAt: now,
-    };
+    const conv = { id, userId, title, createdAt: now, updatedAt: now };
     this.data.conversations.unshift(conv);
     this.data.messages[id] = [];
     this.save();
@@ -144,7 +198,9 @@ class RobinDatabase {
   }
 
   async renameConversation(convId, userId, newTitle) {
-    const conv = this.data.conversations.find((c) => c.id === convId && c.userId === userId);
+    const conv = this.data.conversations.find(
+      (c) => c.id === convId && c.userId === userId
+    );
     if (!conv) throw new Error("Conversation not found");
     conv.title = newTitle;
     conv.updatedAt = new Date().toISOString();
@@ -166,6 +222,11 @@ class RobinDatabase {
     return this.data.messages[convId] || [];
   }
 
+  // Sync version for internal use
+  getMessages(convId) {
+    return this.data.messages[convId] || [];
+  }
+
   async addMessage(convId, role, content, thought = null, model = "Robin Auto") {
     if (!this.data.messages[convId]) {
       this.data.messages[convId] = [];
@@ -180,11 +241,10 @@ class RobinDatabase {
     };
     this.data.messages[convId].push(msg);
 
-    // Update conversation updatedAt timestamp
+    // Update conversation's updatedAt and auto-title on first user message
     const conv = this.data.conversations.find((c) => c.id === convId);
     if (conv) {
       conv.updatedAt = msg.createdAt;
-      // Auto-name conversation on first user query if still generic
       if (conv.title === "New Conversation" && role === "user") {
         conv.title = content.slice(0, 36) + (content.length > 36 ? "..." : "");
       }
@@ -208,7 +268,9 @@ class RobinDatabase {
       updatedAt: new Date().toISOString(),
     };
     if (this.data.profiles[userId]) {
-      this.data.profiles[userId].accountType = plan.startsWith("pro") ? "pro" : "free";
+      this.data.profiles[userId].accountType = plan.startsWith("pro")
+        ? "pro"
+        : "free";
     }
     this.save();
     return this.data.subscriptions[userId];

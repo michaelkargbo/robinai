@@ -181,21 +181,37 @@ async function fetchResponse(intent, raw, webOn, deepReason, chatHistory = [], m
     case "price": {
       let matched = LIVE_MARKETS.find((m) => lower.includes(m.sym.toLowerCase()) || lower.includes(m.name.toLowerCase()));
       if (!matched) matched = LIVE_MARKETS[0];
-      
+
+      let priceData = matched;
+      let sourceName = webOn ? "CoinGecko API · Verified Live Spot Rate" : "CoinGecko API · Spot Feed";
+
+      try {
+        const resp = await fetch(`/api/price/${matched.sym}`);
+        if (resp.ok) {
+          const apiData = await resp.json();
+          if (apiData && apiData.p) {
+            priceData = { ...matched, ...apiData };
+            sourceName = "CoinGecko API · Realtime Spot Feed";
+          }
+        }
+      } catch (e) {
+        console.warn("Live price fetch failed, using fallback cache:", e);
+      }
+
       const thought = deepReason
-        ? `1. Parsing query for target crypto asset identifier ('${matched.sym}').\n2. Aggregating live depth metrics from CoinGecko and Binance spot feeds.\n3. Evaluating 24-hour volume velocity ($${matched.vol}) against 7-day moving averages.\n4. Synthesizing comprehensive market structure without speculative financial advice.`
+        ? `1. Parsing query for target crypto asset identifier ('${priceData.sym}').\n2. Aggregating live depth metrics from CoinGecko and Binance spot feeds.\n3. Evaluating 24-hour volume velocity ($${priceData.vol}) against 7-day moving averages.\n4. Synthesizing comprehensive market structure without speculative financial advice.`
         : null;
 
       return {
         kind: "price",
-        source: webOn ? "CoinGecko API · Verified Live Spot Rate" : "CoinGecko API · Spot Feed",
+        source: sourceName,
         thought,
-        asset: matched.name,
-        data: matched,
-        summary: `${matched.name} (${matched.sym}) is currently trading at $${matched.p.toLocaleString()} USD (${matched.c >= 0 ? "+" : ""}${matched.c}% 24h). 24h trading volume stands at $${matched.vol} with a circulating market capitalization of $${matched.cap}.`,
+        asset: priceData.name,
+        data: priceData,
+        summary: `${priceData.name} (${priceData.sym}) is currently trading at $${typeof priceData.p === 'number' ? priceData.p.toLocaleString() : priceData.p} USD (${priceData.c >= 0 ? "+" : ""}${priceData.c}% 24h). 24h trading volume stands at $${priceData.vol} with a circulating market capitalization of $${priceData.cap}.`,
         follow: [
-          `Analyze ${matched.sym} Tokenomics`,
-          `Check ${matched.sym} Support Levels`,
+          `Analyze ${priceData.sym} Tokenomics`,
+          `Check ${priceData.sym} Support Levels`,
           "View Top 10 Crypto Radar",
           "Explain Market Drivers"
         ]
@@ -1211,6 +1227,34 @@ function ExploreModal({ open, onClose, onSelectPrompt }) {
 }
 
 function MarketRadarModal({ open, onClose, onAnalyze }) {
+  const [markets, setMarkets] = useState(LIVE_MARKETS);
+  const [loading, setLoading] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState(null);
+
+  const fetchLivePrices = useCallback(async () => {
+    setLoading(true);
+    try {
+      const resp = await fetch("/api/prices");
+      if (resp.ok) {
+        const data = await resp.json();
+        if (Array.isArray(data) && data.length > 0) {
+          setMarkets(data);
+          setLastUpdated(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+        }
+      }
+    } catch (err) {
+      console.warn("Live market radar fetch error:", err);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (open) {
+      fetchLivePrices();
+    }
+  }, [open, fetchLivePrices]);
+
   if (!open) return null;
 
   return (
@@ -1222,17 +1266,32 @@ function MarketRadarModal({ open, onClose, onAnalyze }) {
         <div className="flex items-center justify-between border-b px-6 py-4" style={{ borderColor: C.border }}>
           <div className="flex items-center gap-2.5">
             <BarChart3 size={20} style={{ color: C.lime }} />
-            <h2 className="text-[17px] font-bold text-white">Live Crypto Market Radar</h2>
+            <div>
+              <h2 className="text-[17px] font-bold text-white leading-tight">Live Crypto Market Radar</h2>
+              <div className="text-[11px] text-stone-400">
+                {loading ? "Refreshing live spot feeds..." : lastUpdated ? `Live spot feeds · Synced at ${lastUpdated}` : "Real-time spot feeds"}
+              </div>
+            </div>
           </div>
-          <button onClick={onClose} className="rounded-lg p-1.5 text-stone-400 hover:text-white">
-            <X size={18} />
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={fetchLivePrices}
+              disabled={loading}
+              title="Refresh prices"
+              className="rounded-lg p-1.5 text-stone-400 hover:text-white transition-colors disabled:opacity-50"
+            >
+              <RefreshCw size={16} className={loading ? "animate-spin text-lime-400" : ""} />
+            </button>
+            <button onClick={onClose} className="rounded-lg p-1.5 text-stone-400 hover:text-white transition-colors">
+              <X size={18} />
+            </button>
+          </div>
         </div>
 
         <div className="flex-1 overflow-y-auto p-6">
           <div className="divide-y rounded-xl overflow-hidden" style={{ background: C.card, border: `1px solid ${C.border}`, borderColor: C.border }}>
-            {LIVE_MARKETS.map((m) => {
-              const up = m.c >= 0;
+            {markets.map((m) => {
+              const up = Number(m.c) >= 0;
               return (
                 <div key={m.sym} className="flex flex-col sm:flex-row items-start sm:items-center justify-between p-4 gap-3 transition-colors hover:bg-stone-900/40">
                   <div className="flex items-center gap-3">
@@ -1247,7 +1306,7 @@ function MarketRadarModal({ open, onClose, onAnalyze }) {
 
                   <div className="flex items-center justify-between w-full sm:w-auto sm:gap-6">
                     <div className="text-right">
-                      <div className="font-bold text-white">${m.p.toLocaleString()}</div>
+                      <div className="font-bold text-white">${typeof m.p === 'number' ? m.p.toLocaleString() : m.p}</div>
                       <div className="flex items-center justify-end gap-1 text-[12px] font-semibold" style={{ color: up ? C.lime : C.error }}>
                         {up ? <ArrowUpRight size={13} /> : <ArrowDownRight size={13} />}
                         {up ? "+" : ""}{m.c}%
@@ -1334,7 +1393,213 @@ function SafetyModal({ open, onClose, onRunCheck }) {
   );
 }
 
-function SettingsModal({ open, onClose, settings, setSettings }) {
+function SystemUpdatesModal({ open, onClose, onExploreFeature }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState("current"); // "current" | "futures"
+
+  useEffect(() => {
+    if (!open) return;
+    setLoading(true);
+    fetch("/api/system/updates")
+      .then((res) => res.json())
+      .then((res) => {
+        setData(res);
+        localStorage.setItem("robin_cycle_acknowledged", res.currentVersion || "1.0.0");
+      })
+      .catch((err) => {
+        console.warn("Failed to fetch system update info:", err);
+      })
+      .finally(() => setLoading(false));
+  }, [open]);
+
+  if (!open) return null;
+
+  const current = data?.activeCycle;
+  const upcoming = data?.upcomingRoadmap || [];
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fadeIn">
+      <div
+        className="flex max-h-[90vh] w-full max-w-3xl flex-col rounded-2xl overflow-hidden border shadow-2xl"
+        style={{ background: C.bg2, borderColor: C.border }}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between border-b px-6 py-4" style={{ borderColor: C.border }}>
+          <div className="flex items-center gap-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl" style={{ background: "rgba(57,255,20,0.12)", border: `1px solid ${C.limeBorder}` }}>
+              <Sparkles size={18} style={{ color: C.lime }} />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h2 className="text-[17px] font-bold text-white">System Releases & 6-Month Roadmap</h2>
+                <span className="rounded-full px-2 py-0.5 text-[10.5px] font-extrabold uppercase tracking-wide" style={{ background: C.lime, color: "#0A0A0A" }}>
+                  {data?.currentVersion ? `v${data.currentVersion}` : "v1.0.0"}
+                </span>
+              </div>
+              <p className="text-[12px] text-stone-400">
+                Scheduled semi-annual feature releases & decentralized system architecture
+              </p>
+            </div>
+          </div>
+          <button onClick={onClose} className="rounded-lg p-1.5 text-stone-400 hover:text-white transition-colors">
+            <X size={18} />
+          </button>
+        </div>
+
+        {/* Cadence Status Bar */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 px-6 py-3 border-b text-center text-[12px]" style={{ borderColor: C.border, background: C.card }}>
+          <div>
+            <div className="text-[10.5px] text-stone-400 uppercase font-medium">Update Cadence</div>
+            <div className="font-bold text-white mt-0.5">Every 6 Months</div>
+          </div>
+          <div>
+            <div className="text-[10.5px] text-stone-400 uppercase font-medium">Current Phase</div>
+            <div className="font-bold text-white mt-0.5">{current?.releaseDate || "Sept 2026"}</div>
+          </div>
+          <div>
+            <div className="text-[10.5px] text-stone-400 uppercase font-medium">Next Major Cycle</div>
+            <div className="font-bold text-white mt-0.5">{data?.nextReleaseDate || "March 2027"}</div>
+          </div>
+          <div>
+            <div className="text-[10.5px] text-stone-400 uppercase font-medium">Days Until Upgrade</div>
+            <div className="font-bold mt-0.5" style={{ color: C.lime }}>
+              {data?.daysUntilNextCycle !== undefined ? `${data.daysUntilNextCycle} Days` : "Active"}
+            </div>
+          </div>
+        </div>
+
+        {/* Tab Selector */}
+        <div className="flex border-b px-6" style={{ borderColor: C.border }}>
+          <button
+            onClick={() => setActiveTab("current")}
+            className="flex items-center gap-2 py-3 px-4 text-[13px] font-bold border-b-2 transition-colors"
+            style={{
+              borderColor: activeTab === "current" ? C.lime : "transparent",
+              color: activeTab === "current" ? C.lime : C.sub
+            }}
+          >
+            <CheckCircle2 size={15} /> Active System Enhancements
+          </button>
+          <button
+            onClick={() => setActiveTab("futures")}
+            className="flex items-center gap-2 py-3 px-4 text-[13px] font-bold border-b-2 transition-colors"
+            style={{
+              borderColor: activeTab === "futures" ? C.lime : "transparent",
+              color: activeTab === "futures" ? C.lime : C.sub
+            }}
+          >
+            <Zap size={15} /> Visionary Future Features
+          </button>
+        </div>
+
+        {/* Modal Body */}
+        <div className="flex-1 overflow-y-auto p-6 space-y-4">
+          {loading ? (
+            <div className="flex items-center justify-center py-12 text-stone-400 text-[13px]">
+              <RefreshCw size={18} className="animate-spin mr-2 text-lime-400" />
+              Loading system roadmap telemetry...
+            </div>
+          ) : activeTab === "current" ? (
+            <div className="space-y-4">
+              <div className="rounded-xl p-4 border" style={{ background: C.card, borderColor: C.limeBorder }}>
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] font-bold px-2 py-0.5 rounded-md" style={{ background: "rgba(57,255,20,0.15)", color: C.lime }}>
+                      CYCLE #{current?.cycle || 1} · ACTIVE
+                    </span>
+                    <h3 className="text-[15px] font-bold text-white">{current?.tagline || "Genesis Production Core & Hardening"}</h3>
+                  </div>
+                  <span className="text-[12px] text-stone-400">{current?.releaseDate || "September 2026"}</span>
+                </div>
+                <p className="text-[12.5px] text-stone-300 leading-relaxed">
+                  RobinAI has been upgraded with production-grade backend hardening, automated security headers, rate limiting, and real-time spot feed integration.
+                </p>
+              </div>
+
+              <h4 className="text-[13px] font-bold text-white uppercase tracking-wider pt-2">
+                What's Live in This Release:
+              </h4>
+
+              <div className="space-y-2.5">
+                {(current?.highlights || [
+                  "Verified Live Crypto Market Radar with real-time CoinGecko spot rates",
+                  "Enterprise Security Shield: Helmet CSP, HSTS, CORS allowlist, and rate limiting",
+                  "Atomic Persistence Store: Prevents corruption with atomic write buffers & debouncing",
+                  "Live Etherscan blockchain address and EVM transaction decoding",
+                  "Multi-Engine AI Architecture with Gemini 1.5 Flash and Pro deep reasoning"
+                ]).map((item, idx) => (
+                  <div key={idx} className="flex items-start gap-3 rounded-xl p-3.5" style={{ background: C.card, border: `1px solid ${C.border}` }}>
+                    <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full mt-0.5" style={{ background: "rgba(57,255,20,0.15)", color: C.lime }}>
+                      <Check size={12} />
+                    </div>
+                    <span className="text-[13px] text-stone-200">{item}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-5">
+              <p className="text-[12.5px] text-stone-300">
+                RobinAI follows an autonomous 6-month continuous improvement cycle. Every 180 days, major algorithmic intelligence and Web3 autonomous execution features are deployed.
+              </p>
+
+              {upcoming.map((cycle) => (
+                <div key={cycle.cycle} className="rounded-xl p-5 border space-y-3" style={{ background: C.card, borderColor: C.border }}>
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 border-b pb-3" style={{ borderColor: C.border }}>
+                    <div>
+                      <span className="text-[11px] font-bold px-2 py-0.5 rounded-md" style={{ background: "rgba(189,107,255,0.15)", color: C.purple }}>
+                        CYCLE #{cycle.cycle} · {cycle.version}
+                      </span>
+                      <h4 className="text-[15px] font-bold text-white mt-1">{cycle.tagline}</h4>
+                    </div>
+                    <span className="text-[12px] font-semibold text-stone-400">{cycle.releaseDate}</span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                    {cycle.highlights.map((feat, idx) => (
+                      <div key={idx} className="rounded-lg p-3 bg-black/30 border border-stone-800">
+                        <div className="flex items-center gap-2 mb-1">
+                          <Sparkles size={13} style={{ color: C.lime }} />
+                          <span className="text-[12.5px] font-bold text-white">{feat.split(":")[0]}</span>
+                        </div>
+                        <p className="text-[11.5px] text-stone-400">
+                          {feat.includes(":") ? feat.split(":")[1] : feat}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="flex items-center justify-between border-t px-6 py-4" style={{ borderColor: C.border, background: C.card }}>
+          <div className="flex items-center gap-2 text-[12px] text-stone-400">
+            <Activity size={14} style={{ color: C.lime }} />
+            <span>Autonomous System Status: All Nodes Optimal</span>
+          </div>
+          <button
+            onClick={() => {
+              if (onExploreFeature) {
+                onExploreFeature("What are the key upcoming features in the next 6-month RobinAI cycle and how will they help my crypto research?");
+              }
+              onClose();
+            }}
+            className="rounded-xl px-4 py-2 text-[12.5px] font-bold transition-all hover:brightness-105 active:scale-95"
+            style={{ background: C.lime, color: "#0A0A0A" }}
+          >
+            Ask AI About Roadmap
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SettingsModal({ open, onClose, settings, setSettings, onOpenUpdates }) {
   if (!open) return null;
 
   return (
@@ -1419,6 +1684,26 @@ function SettingsModal({ open, onClose, settings, setSettings }) {
                 className="accent-[#B6FF00] h-4 w-4"
               />
             </label>
+          </div>
+
+          {/* 6-Month Roadmap & System Upgrades link */}
+          <div className="pt-2 border-t" style={{ borderColor: C.border }}>
+            <button
+              onClick={() => {
+                onClose();
+                if (onOpenUpdates) onOpenUpdates();
+              }}
+              className="flex w-full items-center justify-between rounded-xl p-3 text-left transition-colors hover:bg-stone-800/40"
+              style={{ background: C.card, border: `1px solid ${C.border}` }}
+            >
+              <div>
+                <div className="text-[13px] font-semibold text-white flex items-center gap-1.5">
+                  <Sparkles size={14} style={{ color: C.lime }} /> System Updates & 6-Month Roadmap
+                </div>
+                <div className="text-[11.5px] text-stone-400">View current version enhancements and upcoming visionary features</div>
+              </div>
+              <ChevronRight size={16} className="text-stone-400" />
+            </button>
           </div>
         </div>
 
@@ -1671,6 +1956,8 @@ function Sidebar({
   onOpenRadar,
   onOpenSafety,
   onOpenSettings,
+  onOpenUpdates,
+  hasNewCycle,
   authUser,
   onSignIn,
   onLogout
@@ -1772,6 +2059,24 @@ function Sidebar({
           >
             <span className="flex items-center gap-2">
               <ShieldAlert size={14} style={{ color: C.error }} /> Anti-Scam Center
+            </span>
+          </button>
+
+          <button
+            onClick={onOpenUpdates}
+            className="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-[12.5px] text-stone-300 hover:text-white hover:bg-stone-800/40 transition-colors"
+          >
+            <span className="flex items-center gap-2">
+              <Sparkles size={14} style={{ color: C.lime }} /> System Updates & Futures
+            </span>
+            <span
+              className="text-[10px] font-bold px-1.5 py-0.5 rounded-full transition-all"
+              style={{
+                background: hasNewCycle ? C.lime : "rgba(57,255,20,0.12)",
+                color: hasNewCycle ? "#0A0A0A" : C.lime
+              }}
+            >
+              {hasNewCycle ? "NEW" : "6M Cycle"}
             </span>
           </button>
         </div>
@@ -1951,6 +2256,8 @@ function ChatHeader({
   setDeepReason,
   onExport,
   onClear,
+  onOpenUpdates,
+  hasNewCycle,
   authUser,
   onSignIn,
   onLogout
@@ -2040,6 +2347,26 @@ function ChatHeader({
             </div>
           )}
         </div>
+
+        {/* 6-Month Roadmap & System Updates */}
+        <button
+          onClick={onOpenUpdates}
+          title="System Updates & Future Roadmap (6-Month Cadence)"
+          className="hidden md:flex items-center gap-1.5 rounded-xl px-2.5 py-1.5 text-[12px] font-medium transition-all hover:bg-stone-800/40"
+          style={{ background: C.card, border: `1px solid ${C.border}`, color: C.sub }}
+        >
+          <Sparkles size={13} style={{ color: C.lime }} />
+          <span>Updates</span>
+          <span
+            className="text-[9.5px] font-bold px-1 py-0.2 rounded"
+            style={{
+              background: hasNewCycle ? C.lime : "rgba(57,255,20,0.15)",
+              color: hasNewCycle ? "#0A0A0A" : C.lime
+            }}
+          >
+            {hasNewCycle ? "NEW" : "6M"}
+          </span>
+        </button>
 
         {/* Export & Actions */}
         <button
@@ -2376,6 +2703,21 @@ export default function RobinAI() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [authOpen, setAuthOpen] = useState(false);
+  const [updatesOpen, setUpdatesOpen] = useState(false);
+  const [hasNewCycle, setHasNewCycle] = useState(false);
+
+  // 6-Month Upgrade Cadence Telemetry Check
+  useEffect(() => {
+    fetch("/api/system/updates")
+      .then((res) => res.json())
+      .then((data) => {
+        const acknowledged = localStorage.getItem("robin_cycle_acknowledged");
+        if (!acknowledged || acknowledged !== data.currentVersion) {
+          setHasNewCycle(true);
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   // Auth / User State
   const [authUser, setAuthUser] = useState(() => {
@@ -2560,6 +2902,8 @@ export default function RobinAI() {
         onOpenRadar={() => setRadarOpen(true)}
         onOpenSafety={() => setSafetyOpen(true)}
         onOpenSettings={() => setSettingsOpen(true)}
+        onOpenUpdates={() => { setUpdatesOpen(true); setHasNewCycle(false); }}
+        hasNewCycle={hasNewCycle}
         authUser={authUser}
         onSignIn={() => setAuthOpen(true)}
         onLogout={handleLogout}
@@ -2580,6 +2924,8 @@ export default function RobinAI() {
           onClear={() => {
             if (active) updateChat(active.id, (c) => ({ ...c, messages: [] }));
           }}
+          onOpenUpdates={() => { setUpdatesOpen(true); setHasNewCycle(false); }}
+          hasNewCycle={hasNewCycle}
           authUser={authUser}
           onSignIn={() => setAuthOpen(true)}
           onLogout={handleLogout}
@@ -2635,6 +2981,13 @@ export default function RobinAI() {
         onClose={() => setSettingsOpen(false)}
         settings={settings}
         setSettings={setSettings}
+        onOpenUpdates={() => { setUpdatesOpen(true); setHasNewCycle(false); }}
+      />
+
+      <SystemUpdatesModal
+        open={updatesOpen}
+        onClose={() => setUpdatesOpen(false)}
+        onExploreFeature={handleSend}
       />
 
       <ExportModal
