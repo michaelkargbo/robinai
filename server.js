@@ -1022,9 +1022,11 @@ app.get("/api/system/updates", (req, res) => {
 
 // ── Route: /api/health ────────────────────────────────────────
 app.get("/api/health", (req, res) => {
+  const isPostgres = !!(process.env.DATABASE_URL || process.env.POSTGRES_URL);
   res.json({
     status: "ok",
     version: "1.0.0",
+    database: isPostgres ? "postgresql" : "local_file_store",
     gemini: !!process.env.GEMINI_API_KEY,
     etherscan: !!process.env.ETHERSCAN_API_KEY,
     coingecko: true,

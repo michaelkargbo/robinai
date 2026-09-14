@@ -8,8 +8,12 @@ import fs from "fs";
 import path from "path";
 import crypto from "crypto";
 import { fileURLToPath } from "url";
+import { PostgresDatabase } from "./postgres.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// Check if PostgreSQL connection string is configured
+const PG_URL = process.env.DATABASE_URL || process.env.POSTGRES_URL;
 
 // Determine the data directory in priority order:
 // 1. DATA_DIR env var (explicit config for any platform)
@@ -292,5 +296,14 @@ class RobinDatabase {
   }
 }
 
-export const db = new RobinDatabase();
+export const db = PG_URL
+  ? new PostgresDatabase(PG_URL)
+  : new RobinDatabase();
+
+if (PG_URL) {
+  console.log("[Database] Initialized with production PostgreSQL engine.");
+} else {
+  console.log("[Database] Initialized with local file store engine.");
+}
+
 export default db;

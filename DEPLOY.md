@@ -171,21 +171,78 @@ sudo certbot --nginx -d robinai.digital -d www.robinai.digital
 
 ---
 
-## 6. Option D: Deploying to Vercel
+## 6. Option D: Deploying to Vercel (Recommended with PostgreSQL)
 
-RobinAI includes `vercel.json` and `api/index.js` for Vercel deployment:
-- **Frontend**: Serves the Vite single page app from `dist/` with edge caching.
-- **Backend API**: Routes `/api/*` to the serverless function in `api/index.js`.
-- *Note*: On Vercel, the local JSON database writes to `/tmp` and resets between cold starts. For persistent databases on Vercel, connect a hosted PostgreSQL or Supabase database.
+RobinAI is configured with native Vercel support via `vercel.json` and `api/index.js`.
+
+### 6.1 Step 1: Push Code to GitHub
+Ensure all latest code is committed and pushed:
+```bash
+git push origin main
+```
+
+### 6.2 Step 2: Import into Vercel
+1. Go to [vercel.com](https://vercel.com/) and click **Add New...** → **Project**.
+2. Select your `robinai` GitHub repository.
+3. Configure the build settings (detected automatically from `vercel.json`):
+   - **Framework Preset**: Vite
+   - **Build Command**: `npm run build`
+   - **Output Directory**: `dist`
+   - **Install Command**: `npm install`
+
+### 6.3 Step 3: Set Up a Managed PostgreSQL Database
+Vercel serverless functions are stateless. To persist user accounts, chat histories, profiles, and subscriptions, connect any standard PostgreSQL database:
+
+- **Option 1: Supabase (Free & Recommended)**:
+  1. Create a project at [supabase.com](https://supabase.com/).
+  2. Go to **Project Settings** → **Database** → **Connection String** (URI mode, Nodejs/Transaction mode).
+  3. Copy the URL (looks like `postgresql://postgres:[PASSWORD]@db.xxxx.supabase.co:5432/postgres?sslmode=require`).
+- **Option 2: Neon (Free & Serverless)**:
+  1. Create a project at [neon.tech](https://neon.tech/).
+  2. Copy the connection string with pooling enabled.
+- **Option 3: Vercel Postgres**:
+  1. In the Vercel dashboard, click **Storage** → **Create Database** → **Postgres**.
+  2. Click **Connect to Project** (automatically injects `POSTGRES_URL`).
+
+### 6.4 Step 4: Configure Environment Variables in Vercel
+Under **Project Settings** → **Environment Variables**, add:
+- `DATABASE_URL` = your PostgreSQL connection URI (with `?sslmode=require`)
+- `GEMINI_API_KEY` = your Google AI Studio Gemini key
+- `JWT_SECRET` = your secure 64-character secret
+- `NODE_ENV` = `production`
+- `ALLOWED_ORIGINS` = `https://robinai.digital,https://www.robinai.digital`
+- `ETHERSCAN_API_KEY` = (optional, for on-chain EVM data)
+- `COINGECKO_API_KEY` = (optional)
+
+*Note*: The database adapter in RobinAI will automatically create all tables matching `db/schema.sql` on the first connection! You can also initialize them manually via `npm run db:init`.
 
 ---
 
-## 7. Custom Domain & DNS Setup
+## 7. Custom Domain & DNS Setup (robinai.digital)
 
-To point your custom domain (e.g. `robinai.digital`) to your server:
+To point your custom domain **`robinai.digital`** to your Vercel deployment:
+
+### 7.1 Add Domains in Vercel
+1. In your Vercel project, go to **Settings** → **Domains**.
+2. Add `robinai.digital`.
+3. Add `www.robinai.digital` (Vercel will offer to automatically redirect `www` to apex or vice versa).
+
+### 7.2 Configure DNS Records in Your Domain Registrar or Cloudflare
+Log in to your domain registrar (Namecheap, GoDaddy, Porkbun, Cloudflare, etc.) and create these DNS records:
+
+| Type | Name / Host | Value / Target | TTL |
+|---|---|---|---|
+| **A** | `@` | `76.76.21.21` | Auto (or 300) |
+| **CNAME** | `www` | `cname.vercel-dns.com` | Auto (or 300) |
+
+*If you use Cloudflare for DNS:*
+- Set Proxy status to **DNS only** (Grey Cloud) during initial verification, then switch to Proxied (Orange Cloud) once verified.
+- Under SSL/TLS, ensure encryption mode is set to **Full** or **Full (strict)**.
+
+---
 
 ### When using a VPS (DigitalOcean / Hetzner / AWS EC2 / Linode):
-Create the following DNS records in your domain registrar or Cloudflare:
+Create the following DNS records:
 
 | Type | Name | Content / Value | TTL |
 |---|---|---|---|
