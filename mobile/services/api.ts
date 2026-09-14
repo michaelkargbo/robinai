@@ -20,7 +20,7 @@ export function getApiBaseUrl(): string {
     }
     return "http://localhost:4000";
   }
-  return "https://robinai-eight.vercel.app";
+  return "https://robinai.digital";
 }
 
 export interface ChatMessage {
